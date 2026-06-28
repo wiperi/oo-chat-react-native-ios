@@ -1,55 +1,209 @@
-import React from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { styles } from '../styles/appStyles';
-import { formatTime } from '../utils/format';
+import { shortAddress } from '../utils/format';
+import type { ConnectionState } from '../types';
 import type { Conversation } from '../types';
+
+const chevronIcon = require('../assets/icons/chevron-right.png');
+const logoIcon = require('../assets/icons/connectonion-logo.png');
+const searchIcon = require('../assets/icons/search.png');
+
+interface AgentGroup {
+  address: string;
+  conversations: Conversation[];
+  latestConversation: Conversation;
+}
 
 export function AgentsScreen(props: {
   conversations: Conversation[];
-  draft: string;
-  onDraftChange: (value: string) => void;
-  onApplyAddress: () => void;
-  onCreate: () => void;
+  activeId: string | null;
+  connectionState: ConnectionState;
+  onAddAgent: () => void;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const isSearching = query.trim().length > 0;
+  const agents = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const groups = new Map<string, AgentGroup>();
+
+    props.conversations.forEach(conversation => {
+      const address = conversation.agentAddress.trim();
+      if (!address) {
+        return;
+      }
+
+      const key = address.toLowerCase();
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, {
+          address,
+          conversations: [conversation],
+          latestConversation: conversation,
+        });
+        return;
+      }
+
+      existing.conversations.push(conversation);
+      if (conversation.updatedAt > existing.latestConversation.updatedAt) {
+        existing.latestConversation = conversation;
+      }
+    });
+
+    return Array.from(groups.values())
+      .sort((a, b) => b.latestConversation.updatedAt - a.latestConversation.updatedAt)
+      .filter(agent => {
+        if (!normalized) {
+          return true;
+        }
+        return (
+          agent.address.toLowerCase().includes(normalized) ||
+          agent.conversations.some(conversation => conversation.title.toLowerCase().includes(normalized))
+        );
+      });
+  }, [props.conversations, query]);
+  const activeAddress = props.conversations
+    .find(conversation => conversation.id === props.activeId)
+    ?.agentAddress.trim().toLowerCase();
+  return (
+    <View style={styles.tabScreen}>
+      <View style={styles.brandHeader}>
+        <View style={styles.logoMark}>
+          <Image source={logoIcon} style={styles.logoImage} resizeMode="contain" />
+        </View>
+        <Text style={styles.brand}>ConnectOnion</Text>
+      </View>
+      <ScrollView
+        style={styles.screenScroll}
+        contentContainerStyle={styles.screenContent}
+        alwaysBounceVertical
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          placeholder="Search agents..."
+        />
+        {agents.length === 0 ? (
+          <View style={[styles.emptyState, searchFocused && styles.emptyStateCompact]}>
+            <View style={[styles.emptyIconTile, searchFocused && styles.emptyIconTileCompact]}>
+              <Text style={styles.emptyIconText}>+</Text>
+            </View>
+            <Text style={styles.emptyTitle}>{isSearching ? 'No matching agents' : 'No agents yet'}</Text>
+            <Text style={styles.emptyBody}>
+              {isSearching ? 'Try another search.' : 'Add a hosted agent address to start chatting from your iPhone.'}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.groupedList}>
+            {agents.map((agent, index) => {
+              const status = getAgentStatus(agent.address.toLowerCase() === activeAddress, props.connectionState);
+              const conversationCount = agent.conversations.length;
+              return (
+                <View key={agent.address.toLowerCase()}>
+                  <Pressable
+                    accessibilityRole="button"
+                    style={({ pressed }) => [styles.agentRow, pressed && styles.listRowPressed]}
+                    onPress={() => props.onSelect(agent.latestConversation.id)}
+                  >
+                    <View style={styles.agentIconTile}>
+                      <AgentGlyph />
+                    </View>
+                    <View style={styles.listMain}>
+                      <Text numberOfLines={1} style={styles.listTitle}>{shortAddress(agent.address)}</Text>
+                      <Text numberOfLines={1} style={styles.listMeta}>
+                        {conversationCount} {conversationCount === 1 ? 'conversation' : 'conversations'}
+                      </Text>
+                    </View>
+                    <View style={styles.statusWrap}>
+                      <View style={[styles.statusDot, status.style]} />
+                      <Text style={[styles.statusText, status.textStyle]}>{status.label}</Text>
+                    </View>
+                    <ChevronGlyph />
+                  </Pressable>
+                  {index < agents.length - 1 ? <View style={styles.listSeparator} /> : null}
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </ScrollView>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Add agent"
+        style={({ pressed }) => [styles.fab, pressed && styles.pressablePressed]}
+        onPress={props.onAddAgent}
+      >
+        <View style={styles.fabPlus}>
+          <View style={styles.fabPlusHorizontal} />
+          <View style={styles.fabPlusVertical} />
+        </View>
+      </Pressable>
+    </View>
+  );
+}
+
+function ChevronGlyph() {
+  return <Image source={chevronIcon} style={styles.chevronImage} resizeMode="contain" />;
+}
+
+function getAgentStatus(isActive: boolean, connectionState: ConnectionState) {
+  if (isActive && connectionState === 'connected') {
+    return {
+      label: 'Connected',
+      style: styles.statusDotLive,
+      textStyle: styles.statusTextLive,
+    };
+  }
+  if (isActive && connectionState === 'reconnecting') {
+    return {
+      label: 'Connecting',
+      style: styles.statusDotConnecting,
+      textStyle: styles.statusTextConnecting,
+    };
+  }
+  return {
+    label: 'Saved',
+    style: styles.statusDotSaved,
+    textStyle: styles.statusTextSaved,
+  };
+}
+
+function SearchBox(props: {
+  value: string;
+  onChange: (value: string) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  placeholder: string;
 }) {
   return (
-    <ScrollView contentContainerStyle={styles.screenContent}>
-      <Text style={styles.sectionTitle}>Agent</Text>
-      <View style={styles.panel}>
-        <Text style={styles.label}>Hosted agent address</Text>
-        <TextInput
-          value={props.draft}
-          onChangeText={props.onDraftChange}
-          autoCapitalize="none"
-          autoCorrect={false}
-          placeholder="0x..."
-          style={styles.input}
-        />
-        <View style={styles.row}>
-          <Pressable style={styles.primaryButton} onPress={props.onApplyAddress}>
-            <Text style={styles.primaryButtonText}>Use Address</Text>
-          </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={props.onCreate}>
-            <Text style={styles.secondaryButtonText}>New Chat</Text>
-          </Pressable>
-        </View>
-      </View>
+    <View style={styles.searchBar}>
+      <Image source={searchIcon} style={styles.searchIcon} resizeMode="contain" />
+      <TextInput
+        value={props.value}
+        onChangeText={props.onChange}
+        onFocus={props.onFocus}
+        onBlur={props.onBlur}
+        autoCapitalize="none"
+        autoCorrect={false}
+        placeholder={props.placeholder}
+        placeholderTextColor="#7B8190"
+        style={styles.searchInput}
+      />
+    </View>
+  );
+}
 
-      <Text style={styles.sectionTitle}>Conversations</Text>
-      {props.conversations.map(conversation => (
-        <View key={conversation.id} style={styles.listRow}>
-          <Pressable style={styles.listMain} onPress={() => props.onSelect(conversation.id)}>
-            <Text style={styles.listTitle}>{conversation.title}</Text>
-            <Text style={styles.listMeta}>
-              {conversation.mode} · {conversation.ui.length} items · {formatTime(conversation.updatedAt)}
-            </Text>
-          </Pressable>
-          <Pressable style={styles.smallDangerButton} onPress={() => props.onDelete(conversation.id)}>
-            <Text style={styles.smallDangerText}>Delete</Text>
-          </Pressable>
-        </View>
-      ))}
-    </ScrollView>
+function AgentGlyph() {
+  return (
+    <View style={styles.agentGlyph}>
+      <View style={styles.agentGlyphCore} />
+      <View style={styles.agentGlyphRing} />
+    </View>
   );
 }

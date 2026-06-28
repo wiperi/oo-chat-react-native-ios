@@ -1,1 +1,1 @@
-export type AppTab = 'agents' | 'chat' | 'settings';
+export type AppTab = 'agents' | 'history' | 'settings';

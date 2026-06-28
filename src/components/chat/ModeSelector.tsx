@@ -16,15 +16,26 @@ export function ModeSelector(props: { conversation: Conversation; onChange: (mod
       {modeLabels.map(item => (
         <Pressable
           key={item.mode}
-          style={[styles.modeButton, props.conversation.mode === item.mode && styles.modeButtonActive]}
-          onPress={() => props.onChange(item.mode, item.mode === 'ulw' ? { turns: props.conversation.ulwTurns ?? 5 } : undefined)}
+          style={({ pressed }) => [
+            styles.modeButton,
+            props.conversation.mode === item.mode && styles.modeButtonActive,
+            pressed && styles.pressablePressed,
+          ]}
+          onPress={() => props.onChange(
+            item.mode,
+            item.mode === 'ulw' && typeof props.conversation.ulwTurns === 'number'
+              ? { turns: props.conversation.ulwTurns }
+              : undefined,
+          )}
         >
           <Text style={[styles.modeText, props.conversation.mode === item.mode && styles.modeTextActive]}>{item.label}</Text>
         </Pressable>
       ))}
-      {props.conversation.mode === 'ulw' ? (
+      {props.conversation.mode === 'ulw' &&
+      typeof props.conversation.ulwTurnsUsed === 'number' &&
+      typeof props.conversation.ulwTurns === 'number' ? (
         <Text style={styles.modeCounter}>
-          {props.conversation.ulwTurnsUsed ?? 0}/{props.conversation.ulwTurns ?? 5}
+          {props.conversation.ulwTurnsUsed}/{props.conversation.ulwTurns}
         </Text>
       ) : null}
     </View>

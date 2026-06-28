@@ -1,24 +1,33 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import { styles } from '../../styles/appStyles';
 import { compactJson } from '../../utils/format';
 import { AttachmentChip } from './AttachmentChip';
 import type { ChatItem } from '../../types';
 
+const logoIcon = require('../../assets/icons/connectonion-logo.png');
+
 export function ChatItemView(props: { item: ChatItem }) {
   const item = props.item;
   if (item.type === 'user') {
     return (
-      <View style={[styles.bubble, styles.userBubble]}>
-        <Text style={styles.userText}>{item.content}</Text>
-        {item.files?.map(file => <AttachmentChip key={file.id} file={file} />)}
+      <View style={styles.userMessageWrap}>
+        <View style={[styles.bubble, styles.userBubble]}>
+          <Text style={styles.userText}>{item.content}</Text>
+          {item.files?.map(file => <AttachmentChip key={file.id} file={file} />)}
+        </View>
       </View>
     );
   }
   if (item.type === 'agent') {
     return (
-      <View style={[styles.bubble, styles.agentBubble]}>
-        <Text style={styles.agentText}>{item.content}</Text>
+      <View style={styles.agentMessageRow}>
+        <Image source={logoIcon} style={styles.chatAvatar} resizeMode="contain" />
+        <View style={styles.agentMessageStack}>
+          <View style={[styles.bubble, styles.agentBubble]}>
+            <Text style={styles.agentText}>{item.content}</Text>
+          </View>
+        </View>
       </View>
     );
   }
@@ -31,10 +40,15 @@ export function ChatItemView(props: { item: ChatItem }) {
     );
   }
   if (item.type === 'thinking') {
+    const meta = [
+      item.model,
+      typeof item.duration_ms === 'number' ? `${item.duration_ms} ms` : undefined,
+    ].filter(Boolean).join(' · ');
+
     return (
       <View style={styles.activityRow}>
         <Text style={styles.activityTitle}>Thinking · {item.status}</Text>
-        <Text style={styles.activityMeta}>{item.model ?? 'model pending'} {item.duration_ms ? `· ${item.duration_ms} ms` : ''}</Text>
+        {meta ? <Text style={styles.activityMeta}>{meta}</Text> : null}
         {item.content ? <Text style={styles.activityBody}>{item.content}</Text> : null}
       </View>
     );
