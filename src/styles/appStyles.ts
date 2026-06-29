@@ -429,6 +429,12 @@ export const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '600',
   },
+  settingsDangerText: {
+    color: colors.red,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '600',
+  },
   settingsMetricsRow: {
     minHeight: 68,
     flexDirection: 'row',
