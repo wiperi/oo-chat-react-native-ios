@@ -7,7 +7,16 @@ import {
   saveActiveConversationId,
   saveConversation,
 } from '../storage/sessionRepository';
-import { loadOrCreateIdentity, signPayload } from '../storage/keyManager';
+import {
+  exportIdentitySeed,
+  importIdentitySeed,
+  loadAgentTokenMetadata,
+  loadOrCreateIdentity,
+  resetIdentity,
+  saveAgentToken,
+  signPayload,
+  type StoredAgentToken,
+} from '../storage/keyManager';
 import { connectHostedAgent, sendPromptToHostedAgent } from './remoteAgentClient';
 import type {
   ActiveGate,
@@ -150,6 +159,7 @@ export function useMobileAgentSession() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastOutbound, setLastOutbound] = useState<SignedMessage | Record<string, unknown> | null>(null);
+  const [activeAgentToken, setActiveAgentToken] = useState<StoredAgentToken | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find(conversation => conversation.id === activeId) ?? conversations[0] ?? null,
@@ -197,6 +207,35 @@ export function useMobileAgentSession() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const agentAddress = activeConversation?.agentAddress.trim();
+
+    if (!agentAddress) {
+      setActiveAgentToken(null);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    loadAgentTokenMetadata(agentAddress)
+      .then(metadata => {
+        if (mounted) {
+          setActiveAgentToken(metadata);
+        }
+      })
+      .catch(err => {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : String(err));
+          setActiveAgentToken(null);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeConversation?.agentAddress]);
 
   const selectConversation = useCallback((id: string) => {
     setActiveId(id);
@@ -288,6 +327,60 @@ export function useMobileAgentSession() {
         upsertConversation(appendItems(target, [{ id: makeId('error'), type: 'error', message }]));
       });
   }, [conversations, selectConversation, upsertConversation]);
+
+  const saveAgentCredential = useCallback(async (agentAddress: string, token: string) => {
+    const normalized = agentAddress.trim();
+    if (!isHostedAgentAddress(normalized)) {
+      setError('Enter a hosted agent address in 0x-prefixed Ed25519 format.');
+      return null;
+    }
+
+    try {
+      const metadata = await saveAgentToken(normalized, token);
+      if (activeConversation?.agentAddress.trim().toLowerCase() === normalized.toLowerCase()) {
+        setActiveAgentToken(metadata);
+      }
+      return metadata;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }, [activeConversation?.agentAddress]);
+
+  const backupIdentitySeed = useCallback(async () => {
+    try {
+      setError(null);
+      return await exportIdentitySeed();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }, []);
+
+  const restoreIdentitySeed = useCallback(async (seedHex: string) => {
+    try {
+      setError(null);
+      const nextIdentity = await importIdentitySeed(seedHex);
+      setIdentity(nextIdentity);
+      return nextIdentity;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }, []);
+
+  const resetDeviceIdentity = useCallback(async () => {
+    try {
+      setError(null);
+      await resetIdentity();
+      const nextIdentity = await loadOrCreateIdentity();
+      setIdentity(nextIdentity);
+      return nextIdentity;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  }, []);
 
   const send = useCallback((prompt: string, files: FileAttachment[]) => {
     if (!activeConversation || isProcessing) {
@@ -499,11 +592,16 @@ export function useMobileAgentSession() {
     isProcessing,
     error,
     lastOutbound,
+    activeAgentToken,
     selectConversation,
     createConversation,
     removeConversation,
     updateAgentAddress,
     connectToAgent,
+    saveAgentCredential,
+    backupIdentitySeed,
+    restoreIdentitySeed,
+    resetDeviceIdentity,
     setMode,
     send,
     respondToAskUser,

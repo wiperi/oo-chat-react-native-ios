@@ -24,6 +24,7 @@ export function AppShell() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [agentAddressDraft, setAgentAddressDraft] = useState('');
+  const [agentTokenDraft, setAgentTokenDraft] = useState('');
   const [pendingAgentAddress, setPendingAgentAddress] = useState<string | null>(null);
   const [hasSeenWelcome, setHasSeenWelcome] = useState<boolean | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -104,12 +105,18 @@ export function AppShell() {
 
   const connectDraftAgent = useCallback(() => {
     const normalizedAddress = agentAddressDraft.trim();
+    const token = agentTokenDraft.trim();
     setPendingAgentAddress(normalizedAddress);
+    if (token) {
+      session.saveAgentCredential(normalizedAddress, token).catch(() => undefined);
+      setAgentTokenDraft('');
+    }
     session.connectToAgent(normalizedAddress);
-  }, [agentAddressDraft, session]);
+  }, [agentAddressDraft, agentTokenDraft, session]);
 
   const closeAddAgent = useCallback(() => {
     setPendingAgentAddress(null);
+    setAgentTokenDraft('');
     setIsAddingAgent(false);
   }, []);
 
@@ -138,7 +145,9 @@ export function AppShell() {
       return (
         <AddAgentScreen
           draft={agentAddressDraft}
+          tokenDraft={agentTokenDraft}
           onDraftChange={setAgentAddressDraft}
+          onTokenDraftChange={setAgentTokenDraft}
           onConnect={connectDraftAgent}
           onBack={closeAddAgent}
           showBack={isAddingAgent}
@@ -150,7 +159,9 @@ export function AppShell() {
       return (
         <AddAgentScreen
           draft={agentAddressDraft}
+          tokenDraft={agentTokenDraft}
           onDraftChange={setAgentAddressDraft}
+          onTokenDraftChange={setAgentTokenDraft}
           onConnect={connectDraftAgent}
           onBack={closeAddAgent}
           showBack={false}
@@ -219,9 +230,13 @@ export function AppShell() {
           active={active}
           conversations={session.conversations}
           identity={session.identity}
+          activeAgentToken={session.activeAgentToken}
           connectionState={session.connectionState}
           lastOutbound={session.lastOutbound}
           onReconnect={session.reconnect}
+          onBackupSeed={session.backupIdentitySeed}
+          onImportSeed={session.restoreIdentitySeed}
+          onResetIdentity={session.resetDeviceIdentity}
         />
       );
     }
@@ -230,6 +245,7 @@ export function AppShell() {
     addFiles,
     addImages,
     agentAddressDraft,
+    agentTokenDraft,
     attachments,
     connectDraftAgent,
     closeAddAgent,

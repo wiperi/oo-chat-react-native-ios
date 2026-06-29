@@ -4,10 +4,22 @@ import * as Keychain from 'react-native-keychain';
 import nacl from 'tweetnacl';
 import type { SignedMessage, StoredIdentity } from '../types';
 
-const SERVICE = 'connectonion.mobile.identity.ed25519';
+const IDENTITY_SERVICE = 'connectonion.mobile.identity.ed25519';
+const AGENT_TOKEN_SERVICE_PREFIX = 'connectonion.mobile.agent-token.';
 
 interface KeychainIdentity extends StoredIdentity {
+  seedHex: string;
   secretKeyHex: string;
+}
+
+export interface StoredAgentToken {
+  agentAddress: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface KeychainAgentToken extends StoredAgentToken {
+  token: string;
 }
 
 function toHex(bytes: Uint8Array): string {
@@ -17,6 +29,10 @@ function toHex(bytes: Uint8Array): string {
 }
 
 function fromHex(hex: string): Uint8Array {
+  if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) {
+    throw new Error('Invalid hex value.');
+  }
+
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i += 1) {
     bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -80,6 +96,22 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+function buildIdentityFromSeed(seed: Uint8Array, createdAt = Date.now()): KeychainIdentity {
+  if (seed.length !== 32) {
+    throw new Error('Ed25519 seed must be 32 bytes.');
+  }
+
+  const keyPair = nacl.sign.keyPair.fromSeed(seed);
+  const publicKeyHex = toHex(keyPair.publicKey);
+  return {
+    address: `0x${publicKeyHex}`,
+    publicKeyHex,
+    seedHex: toHex(seed),
+    secretKeyHex: toHex(keyPair.secretKey),
+    createdAt,
+  };
+}
+
 function publicIdentity(identity: KeychainIdentity): StoredIdentity {
   return {
     address: identity.address,
@@ -88,29 +120,31 @@ function publicIdentity(identity: KeychainIdentity): StoredIdentity {
   };
 }
 
+async function storeRawIdentity(identity: KeychainIdentity): Promise<void> {
+  await Keychain.setGenericPassword(identity.address, JSON.stringify(identity), {
+    service: IDENTITY_SERVICE,
+    accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+  });
+}
+
 async function loadRawIdentity(): Promise<KeychainIdentity | null> {
-  const credentials = await Keychain.getGenericPassword({ service: SERVICE });
+  const credentials = await Keychain.getGenericPassword({ service: IDENTITY_SERVICE });
   if (!credentials) {
     return null;
   }
-  return JSON.parse(credentials.password) as KeychainIdentity;
+  const identity = JSON.parse(credentials.password) as KeychainIdentity;
+  if (!identity.seedHex && identity.secretKeyHex) {
+    const secretKey = fromHex(identity.secretKeyHex);
+    if (secretKey.length >= 32) {
+      identity.seedHex = toHex(secretKey.slice(0, 32));
+    }
+  }
+  return identity;
 }
 
 async function createRawIdentity(): Promise<KeychainIdentity> {
-  const keyPair = nacl.sign.keyPair.fromSeed(randomSeed());
-  const publicKeyHex = toHex(keyPair.publicKey);
-  const identity: KeychainIdentity = {
-    address: `0x${publicKeyHex}`,
-    publicKeyHex,
-    secretKeyHex: toHex(keyPair.secretKey),
-    createdAt: Date.now(),
-  };
-
-  await Keychain.setGenericPassword(identity.address, JSON.stringify(identity), {
-    service: SERVICE,
-    accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
-  });
-
+  const identity = buildIdentityFromSeed(randomSeed());
+  await storeRawIdentity(identity);
   return identity;
 }
 
@@ -123,8 +157,28 @@ async function loadOrCreateRawIdentity(): Promise<KeychainIdentity> {
   return createRawIdentity();
 }
 
+function agentTokenService(agentAddress: string): string {
+  return `${AGENT_TOKEN_SERVICE_PREFIX}${agentAddress.toLowerCase()}`;
+}
+
 export async function loadOrCreateIdentity(): Promise<StoredIdentity> {
   return publicIdentity(await loadOrCreateRawIdentity());
+}
+
+export async function exportIdentitySeed(): Promise<string> {
+  const identity = await loadOrCreateRawIdentity();
+  return identity.seedHex;
+}
+
+export async function importIdentitySeed(seedHex: string): Promise<StoredIdentity> {
+  const normalized = seedHex.trim().replace(/^0x/i, '');
+  const identity = buildIdentityFromSeed(fromHex(normalized));
+  await storeRawIdentity(identity);
+  return publicIdentity(identity);
+}
+
+export async function resetIdentity(): Promise<void> {
+  await Keychain.resetGenericPassword({ service: IDENTITY_SERVICE });
 }
 
 export async function signPayload(type: string, payload: Record<string, unknown>): Promise<SignedMessage> {
@@ -141,4 +195,76 @@ export async function signPayload(type: string, payload: Record<string, unknown>
     signature: toHex(signature),
     timestamp: canonicalPayload.timestamp,
   };
+}
+
+export async function saveAgentToken(agentAddress: string, token: string): Promise<StoredAgentToken> {
+  const trimmedToken = token.trim();
+  if (!trimmedToken) {
+    throw new Error('Token cannot be empty.');
+  }
+
+  const existing = await loadAgentTokenMetadata(agentAddress);
+  const now = Date.now();
+  const entry: KeychainAgentToken = {
+    agentAddress,
+    token: trimmedToken,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  await Keychain.setGenericPassword(agentAddress, JSON.stringify(entry), {
+    service: agentTokenService(agentAddress),
+    accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+  });
+
+  return {
+    agentAddress: entry.agentAddress,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+export async function loadAgentToken(agentAddress: string): Promise<string | null> {
+  const credentials = await Keychain.getGenericPassword({
+    service: agentTokenService(agentAddress),
+  });
+  if (!credentials) {
+    return null;
+  }
+
+  try {
+    return (JSON.parse(credentials.password) as KeychainAgentToken).token;
+  } catch {
+    return credentials.password;
+  }
+}
+
+export async function loadAgentTokenMetadata(agentAddress: string): Promise<StoredAgentToken | null> {
+  const credentials = await Keychain.getGenericPassword({
+    service: agentTokenService(agentAddress),
+  });
+  if (!credentials) {
+    return null;
+  }
+
+  try {
+    const entry = JSON.parse(credentials.password) as KeychainAgentToken;
+    return {
+      agentAddress: entry.agentAddress,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+    };
+  } catch {
+    return {
+      agentAddress,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+}
+
+export async function deleteAgentSecrets(agentAddress: string): Promise<void> {
+  await Keychain.resetGenericPassword({
+    service: agentTokenService(agentAddress),
+  });
 }
